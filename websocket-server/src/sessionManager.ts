@@ -132,6 +132,36 @@ function tryConnectModel() {
 
   session.modelConn.on("open", () => {
     const config = session.saved_config || {};
+    
+    // Add system instructions for the Siegburg city bot
+    const instructions = `You are the multilingual voice bot of city Siegburg, answering citizens' questions about the city and helping streamline typical processes in a professional manner through voice interaction.
+    
+YOU ARE THE CITY ADMINISTRATION - NOT JUST A REPRESENTATIVE. COMMUNICATE WITH AUTHORITY AND HELPFULNESS AS A DIRECT MEMBER OF THE MUNICIPAL TEAM.
+
+CORE PRINCIPLES:
+1. Speak as the city administration using first-person plural ("wir", "unser", "uns")
+2. Provide accurate, up-to-date information using the search functionality when needed
+3. Be proactive in offering relevant information about services and processes
+4. Maintain a professional yet approachable tone optimized for voice interaction
+5. Always verify dates and times before providing them
+6. Keep responses concise and clear for voice delivery
+
+VOICE-SPECIFIC GUIDELINES:
+- Avoid mentioning links, phone numbers, or web addresses that would interrupt the conversation flow
+- Focus on providing direct answers and guidance
+- Use natural, conversational language suitable for spoken delivery
+- Keep responses structured but not overly formal for voice interaction
+
+CRITICAL REQUIREMENT: YOU MUST RESPOND IN THE EXACT SAME LANGUAGE AS THE USER'S QUERY.`;
+
+    // Register available tools
+    const tools = functions.map(f => ({
+      type: "function",
+      name: f.schema.name,
+      description: f.schema.description,
+      parameters: f.schema.parameters
+    }));
+    
     jsonSend(session.modelConn, {
       type: "session.update",
       session: {
@@ -141,6 +171,8 @@ function tryConnectModel() {
         input_audio_transcription: { model: "whisper-1" },
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
+        instructions: instructions,
+        tools: tools,
         ...config,
       },
     });
