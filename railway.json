@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "services": {
+    "websocket-server": {
+      "source": "./websocket-server",
+      "builder": "NIXPACKS",
+      "watchIgnore": ["node_modules", "dist"],
+      "variables": {
+        "PORT": "8080"
+      }
+    },
+    "webapp": {
+      "source": "./webapp",
+      "builder": "NIXPACKS",
+      "watchIgnore": ["node_modules", ".next"]
+    }
+  }
+}

@@ -77,7 +77,8 @@ export default function ChecklistAndConfig({
         // 3. Check local server & public URL
         let foundPublicUrl = "";
         try {
-          const resLocal = await fetch("http://localhost:8081/public-url");
+          const baseUrl = process.env.NEXT_PUBLIC_WEBSOCKET_URL || "http://localhost:8081";
+          const resLocal = await fetch(`${baseUrl}/public-url`);
           if (resLocal.ok) {
             const pubData = await resLocal.json();
             foundPublicUrl = pubData?.publicUrl || "";

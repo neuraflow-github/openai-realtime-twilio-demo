@@ -11,20 +11,52 @@ import {
   handleFrontendConnection,
 } from "./sessionManager";
 import functions from "./functionHandlers";
+import { AzureOpenAIConfig } from "./azureConfig";
 
 dotenv.config();
 
 const PORT = parseInt(process.env.PORT || "8081", 10);
 const PUBLIC_URL = process.env.PUBLIC_URL || "";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+
+// Azure or OpenAI configuration
+const USE_AZURE_OPENAI = process.env.USE_AZURE_OPENAI === "true";
+const OPENAI_API_KEY = USE_AZURE_OPENAI 
+  ? (process.env.AZURE_OPENAI_API_KEY || "")
+  : (process.env.OPENAI_API_KEY || "");
 
 if (!OPENAI_API_KEY) {
-  console.error("OPENAI_API_KEY environment variable is required");
+  console.error(`${USE_AZURE_OPENAI ? 'AZURE_OPENAI_API_KEY' : 'OPENAI_API_KEY'} environment variable is required`);
+  process.exit(1);
+}
+
+// Azure configuration
+const azureConfig: AzureOpenAIConfig | undefined = USE_AZURE_OPENAI ? {
+  useAzure: true,
+  azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
+  azureDeployment: process.env.AZURE_OPENAI_DEPLOYMENT,
+  azureApiVersion: process.env.AZURE_API_VERSION || "2024-12-17"
+} : undefined;
+
+if (USE_AZURE_OPENAI) {
+  console.log("🔧 Azure Configuration:");
+  console.log("  Endpoint:", process.env.AZURE_OPENAI_ENDPOINT);
+  console.log("  Deployment:", process.env.AZURE_OPENAI_DEPLOYMENT);
+  console.log("  API Version:", process.env.AZURE_API_VERSION);
+}
+
+if (USE_AZURE_OPENAI && (!azureConfig?.azureEndpoint || !azureConfig?.azureDeployment)) {
+  console.error("AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT are required when USE_AZURE_OPENAI is true");
   process.exit(1);
 }
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: [
+    process.env.WEBAPP_URL || "http://localhost:3000",
+    "http://localhost:3000"
+  ],
+  credentials: true
+}));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -68,7 +100,8 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   if (type === "call") {
     if (currentCall) currentCall.close();
     currentCall = ws;
-    handleCallConnection(currentCall, OPENAI_API_KEY);
+    handleCallConnection(currentCall, OPENAI_API_KEY, azureConfig);
+    console.log(`Using ${USE_AZURE_OPENAI ? 'Azure OpenAI' : 'OpenAI'} for voice calls`);
   } else if (type === "logs") {
     if (currentLogs) currentLogs.close();
     currentLogs = ws;
