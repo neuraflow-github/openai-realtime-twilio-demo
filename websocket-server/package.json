@@ -8,7 +8,7 @@
     "start": "node dist/server.js",
     "dev": "nodemon --watch 'src/**/*' --watch '.env' --ext 'ts,js,xml,env' --exec 'ts-node' src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "cli": "ts-node src/voiceCLI.ts",
+    "cli": "ts-node src/cli.ts",
     "langsmith": "ts-node src/langsmithServer.ts",
     "langsmith:dev": "nodemon --watch 'src/**/*' --watch '.env' --ext 'ts,js,xml,env' --exec 'ts-node' src/langsmithServer.ts"
   },

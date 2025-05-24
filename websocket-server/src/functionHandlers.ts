@@ -4,46 +4,6 @@ import { traceableFunction } from "./tracing";
 
 const functions: FunctionHandler[] = [];
 
-// Add the simple add function from your original tools
-functions.push({
-  schema: {
-    name: "add",
-    type: "function",
-    description: "Add two numbers. Please let the user know that you're adding the numbers BEFORE you call the tool",
-    parameters: {
-      type: "object",
-      properties: {
-        a: {
-          type: "number",
-          description: "First number to add"
-        },
-        b: {
-          type: "number",
-          description: "Second number to add"
-        },
-      },
-      required: ["a", "b"],
-    },
-  },
-  handler: traceableFunction(
-    async (args: { a: number; b: number }) => {
-      console.log(`[ADD] Input: ${JSON.stringify(args)}`);
-      const result = args.a + args.b;
-      const output = { result };
-      console.log(`[ADD] Output: ${JSON.stringify(output)}`);
-      return JSON.stringify(output);
-    },
-    { 
-      name: "add_function", 
-      metadata: { 
-        type: "math",
-        description: "Adds two numbers together",
-        inputs: ["a: number", "b: number"],
-        outputs: ["result: number"]
-      } 
-    }
-  ),
-});
 
 // Add PII detection function
 functions.push({
@@ -71,14 +31,14 @@ functions.push({
       console.log(`[PII_HANDLER] Output: ${JSON.stringify(output)}`);
       return JSON.stringify(output);
     },
-    { 
-      name: "pii_handler", 
-      metadata: { 
+    {
+      name: "pii_handler",
+      metadata: {
         type: "privacy",
         description: "Handles statements containing personally identifiable information",
         inputs: ["statement: string"],
         outputs: ["message: string"]
-      } 
+      }
     }
   ),
 });
@@ -140,14 +100,14 @@ functions.push({
         return JSON.stringify(errorOutput);
       }
     },
-    { 
-      name: "tavily_search", 
-      metadata: { 
+    {
+      name: "tavily_search",
+      metadata: {
         type: "search",
         description: "Searches for current information using Tavily API",
         inputs: ["query: string", "max_results?: number"],
         outputs: ["answer: string", "results: array"]
-      } 
+      }
     }
   ),
 });
@@ -190,14 +150,14 @@ functions.push({
         return JSON.stringify(errorOutput);
       }
     },
-    { 
-      name: "get_weather", 
-      metadata: { 
+    {
+      name: "get_weather",
+      metadata: {
         type: "weather",
         description: "Fetches current weather data from coordinates",
         inputs: ["latitude: number", "longitude: number"],
         outputs: ["temp: number (celsius)"]
-      } 
+      }
     }
   ),
 });
