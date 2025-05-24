@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "nodemon --watch 'src/**/*' --watch '.env' --ext 'ts,js,xml,env' --exec 'ts-node' src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "voice": "ts-node src/voiceCLI.ts"
   },
   "keywords": [],
   "author": "",

@@ -38,13 +38,13 @@ functions.push({
   schema: {
     name: "tavily_search",
     type: "function",
-    description: "Search for current information about Siegburg city services, events, procedures, and municipal information. MANDATORY USAGE: You MUST use this tool for any specific information about municipal services, current events, procedures, dates, times, locations, or city-related facts.",
+    description: "Search for current information about Siegburg city services, events, procedures, and municipal information. MANDATORY USAGE: You MUST use this tool BEFORE providing ANY specific information about: dog registration, permits, licenses, office locations, opening hours, fees, required documents, procedures, or any other municipal services. NEVER answer from memory - ALWAYS search first for factual questions about city services.",
     parameters: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "The search query"
+          description: "The search query in German or the user's language. Examples: 'Hund anmelden Siegburg', 'Hundesteuer Siegburg Anmeldung', 'Bürgerbüro Öffnungszeiten Siegburg'"
         },
         max_results: {
           type: "number",
