@@ -1,6 +1,6 @@
 import { FunctionHandler } from "./types";
 import axios from "axios";
-import { traceable } from "./tracing";
+import { traceableFunction } from "./tracing";
 
 const functions: FunctionHandler[] = [];
 
@@ -25,11 +25,23 @@ functions.push({
       required: ["a", "b"],
     },
   },
-  handler: traceable(
+  handler: traceableFunction(
     async (args: { a: number; b: number }) => {
-      return JSON.stringify({ result: args.a + args.b });
+      console.log(`[ADD] Input: ${JSON.stringify(args)}`);
+      const result = args.a + args.b;
+      const output = { result };
+      console.log(`[ADD] Output: ${JSON.stringify(output)}`);
+      return JSON.stringify(output);
     },
-    { name: "add_function", metadata: { type: "math" } }
+    { 
+      name: "add_function", 
+      metadata: { 
+        type: "math",
+        description: "Adds two numbers together",
+        inputs: ["a: number", "b: number"],
+        outputs: ["result: number"]
+      } 
+    }
   ),
 });
 
@@ -55,32 +67,50 @@ functions.push({
       required: ["query"],
     },
   },
-  handler: traceable(
+  handler: traceableFunction(
     async (args: { query: string; max_results?: number }) => {
+      console.log(`[TAVILY_SEARCH] Input: ${JSON.stringify(args)}`);
       try {
         // You'll need to add your Tavily API key to the .env file
         const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
         if (!TAVILY_API_KEY) {
-          return JSON.stringify({ error: "Tavily API key not configured" });
+          const errorOutput = { error: "Tavily API key not configured" };
+          console.log(`[TAVILY_SEARCH] Output (Error): ${JSON.stringify(errorOutput)}`);
+          return JSON.stringify(errorOutput);
         }
 
-        const response = await axios.post('https://api.tavily.com/search', {
+        const search_params = {
           api_key: TAVILY_API_KEY,
           query: args.query,
-          max_results: args.max_results || 5,
-          include_answer: true,
-        });
+          search_depth: "advanced",
+          max_results: 20,
+          include_answer: false,
+        };
 
-        return JSON.stringify({
+        const response = await axios.post('https://api.tavily.com/search', search_params);
+
+        const output = {
           answer: response.data.answer,
           results: response.data.results
-        });
+        };
+        console.log(`[TAVILY_SEARCH] Output: ${JSON.stringify(output)}`);
+        return JSON.stringify(output);
       } catch (error) {
         console.error("Tavily search error:", error);
-        return JSON.stringify({ error: "Search failed" });
+        const errorOutput = { error: "Search failed" };
+        console.log(`[TAVILY_SEARCH] Output (Error): ${JSON.stringify(errorOutput)}`);
+        return JSON.stringify(errorOutput);
       }
     },
-    { name: "tavily_search", metadata: { type: "search" } }
+    { 
+      name: "tavily_search", 
+      metadata: { 
+        type: "search",
+        description: "Searches for current information using Tavily API",
+        inputs: ["query: string", "max_results?: number"],
+        outputs: ["answer: string", "results: array"]
+      } 
+    }
   ),
 });
 
@@ -103,16 +133,34 @@ functions.push({
       required: ["latitude", "longitude"],
     },
   },
-  handler: traceable(
+  handler: traceableFunction(
     async (args: { latitude: number; longitude: number }) => {
-      const response = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${args.latitude}&longitude=${args.longitude}&current=temperature_2m,wind_speed_10m&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m`
-      );
-      const data = await response.json();
-      const currentTemp = data.current?.temperature_2m;
-      return JSON.stringify({ temp: currentTemp });
+      console.log(`[GET_WEATHER] Input: ${JSON.stringify(args)}`);
+      try {
+        const response = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${args.latitude}&longitude=${args.longitude}&current=temperature_2m,wind_speed_10m&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m`
+        );
+        const data = await response.json();
+        const currentTemp = data.current?.temperature_2m;
+        const output = { temp: currentTemp };
+        console.log(`[GET_WEATHER] Output: ${JSON.stringify(output)}`);
+        return JSON.stringify(output);
+      } catch (error) {
+        console.error("Weather fetch error:", error);
+        const errorOutput = { error: "Failed to fetch weather" };
+        console.log(`[GET_WEATHER] Output (Error): ${JSON.stringify(errorOutput)}`);
+        return JSON.stringify(errorOutput);
+      }
     },
-    { name: "get_weather", metadata: { type: "weather" } }
+    { 
+      name: "get_weather", 
+      metadata: { 
+        type: "weather",
+        description: "Fetches current weather data from coordinates",
+        inputs: ["latitude: number", "longitude: number"],
+        outputs: ["temp: number (celsius)"]
+      } 
+    }
   ),
 });
 

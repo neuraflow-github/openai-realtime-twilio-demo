@@ -35,13 +35,13 @@ CRITICAL REQUIREMENT: YOU MUST RESPOND IN THE EXACT SAME LANGUAGE AS THE USER'S 
 // Initial greeting configuration
 export const INITIAL_GREETING = {
   enabled: true,
-  message: "Say a brief greeting in German",
+  message: "Say a brief greeting in German, mentioning that you are an AI assistant for the city of Siegburg",
   delayMs: 1000
 };
 
 // Voice configuration
 export const VOICE_CONFIG = {
-  voice: "verse", // Options: "alloy", "echo", "fable", "onyx", "nova", "shimmer", "ash", "ballad", "coral", "sage", "verse"
+  voice: "sage", // Options: "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"
   speed: 1.2 // Speed of speech (0.25 to 4.0)
 };
 
