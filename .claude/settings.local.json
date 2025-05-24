@@ -3,7 +3,8 @@
     "allow": [
       "mcp__tavily-mcp__tavily-search",
       "mcp__tavily-mcp__tavily-extract",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(mkdir:*)"
     ],
     "deny": []
   }
