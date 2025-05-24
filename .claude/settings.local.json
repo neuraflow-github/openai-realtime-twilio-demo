@@ -4,7 +4,8 @@
       "mcp__tavily-mcp__tavily-search",
       "mcp__tavily-mcp__tavily-extract",
       "Bash(npm install:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "WebFetch(domain:docs.smith.langchain.com)"
     ],
     "deny": []
   }

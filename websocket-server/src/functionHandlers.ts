@@ -45,6 +45,44 @@ functions.push({
   ),
 });
 
+// Add PII detection function
+functions.push({
+  schema: {
+    name: "handle_pii_statement",
+    type: "function",
+    description: "Handle user statements that contain personally identifiable information (PII) such as names, addresses, phone numbers, email addresses, ID numbers, or other personal details. Use this when the user makes a statement (not a question) that includes personal information.",
+    parameters: {
+      type: "object",
+      properties: {
+        statement: {
+          type: "string",
+          description: "The user's statement that contains PII"
+        },
+      },
+      required: ["statement"],
+    },
+  },
+  handler: traceableFunction(
+    async (args: { statement: string }) => {
+      console.log(`[PII_HANDLER] Input detected: ${JSON.stringify(args)}`);
+      const output = {
+        message: "I notice you've shared personal information. For your privacy and security, please avoid sharing personally identifiable information (PII) such as names, addresses, phone numbers, email addresses, or ID numbers in our conversation. I'm here to help with general information about city services and procedures without needing your personal details."
+      };
+      console.log(`[PII_HANDLER] Output: ${JSON.stringify(output)}`);
+      return JSON.stringify(output);
+    },
+    { 
+      name: "pii_handler", 
+      metadata: { 
+        type: "privacy",
+        description: "Handles statements containing personally identifiable information",
+        inputs: ["statement: string"],
+        outputs: ["message: string"]
+      } 
+    }
+  ),
+});
+
 // Add Tavily search function
 functions.push({
   schema: {
