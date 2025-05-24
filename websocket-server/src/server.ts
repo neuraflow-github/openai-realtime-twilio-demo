@@ -12,6 +12,7 @@ import {
 } from "./sessionManager";
 import functions from "./functionHandlers";
 import { AzureOpenAIConfig } from "./azureConfig";
+import { logLangSmithEvent } from "./tracing";
 
 dotenv.config();
 
@@ -113,4 +114,9 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  if (process.env.LANGSMITH_TRACING === "true") {
+    console.log("🦜 LangSmith tracing enabled");
+    console.log(`📊 Project: ${process.env.LANGSMITH_PROJECT}`);
+    logLangSmithEvent("server_started", { port: PORT, provider: USE_AZURE_OPENAI ? "Azure" : "OpenAI" });
+  }
 });

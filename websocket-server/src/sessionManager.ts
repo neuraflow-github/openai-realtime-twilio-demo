@@ -1,6 +1,14 @@
 import { RawData, WebSocket } from "ws";
 import functions from "./functionHandlers";
 import { AzureOpenAIConfig, getAzureRealtimeUrl, getAzureHeaders } from "./azureConfig";
+import { traceable, logLangSmithEvent } from "./tracing";
+import { 
+  startConversation, 
+  endConversation, 
+  trackUserMessage, 
+  trackAssistantMessage,
+  trackFunctionCall 
+} from "./conversationTracker";
 
 interface Session {
   twilioConn?: WebSocket;
@@ -17,11 +25,12 @@ interface Session {
 
 let session: Session = {};
 
-export function handleCallConnection(
-  ws: WebSocket, 
-  openAIApiKey: string,
-  azureConfig?: AzureOpenAIConfig
-) {
+export const handleCallConnection = traceable(
+  async function handleCallConnection(
+    ws: WebSocket, 
+    openAIApiKey: string,
+    azureConfig?: AzureOpenAIConfig
+  ) {
   cleanupConnection(session.twilioConn);
   session.twilioConn = ws;
   session.openAIApiKey = openAIApiKey;
@@ -30,6 +39,9 @@ export function handleCallConnection(
   ws.on("message", handleTwilioMessage);
   ws.on("error", ws.close);
   ws.on("close", () => {
+    if (session.streamSid) {
+      endConversation(session.streamSid);
+    }
     cleanupConnection(session.modelConn);
     cleanupConnection(session.twilioConn);
     session.twilioConn = undefined;
@@ -40,7 +52,9 @@ export function handleCallConnection(
     session.latestMediaTimestamp = undefined;
     if (!session.frontendConn) session = {};
   });
-}
+  },
+  { name: "handleCallConnection", metadata: { type: "websocket-handler" } }
+);
 
 export function handleFrontendConnection(ws: WebSocket) {
   cleanupConnection(session.frontendConn);
@@ -54,7 +68,8 @@ export function handleFrontendConnection(ws: WebSocket) {
   });
 }
 
-async function handleFunctionCall(item: { name: string; arguments: string }) {
+const handleFunctionCall = traceable(
+  async function handleFunctionCall(item: { name: string; arguments: string }) {
   console.log("Handling function call:", item);
   const fnDef = functions.find((f) => f.schema.name === item.name);
   if (!fnDef) {
@@ -80,13 +95,18 @@ async function handleFunctionCall(item: { name: string; arguments: string }) {
       error: `Error running function ${item.name}: ${err.message}`,
     });
   }
-}
+  },
+  { name: "handleFunctionCall", metadata: { type: "function-call" } }
+);
 
 function handleTwilioMessage(data: RawData) {
   const msg = parseMessage(data);
   if (!msg) return;
 
-  console.log("📞 Twilio message:", msg.event);
+  // Only log non-media events to reduce noise
+  if (msg.event !== "media") {
+    console.log("📞 Twilio message:", msg.event);
+  }
   
   switch (msg.event) {
     case "start":
@@ -94,6 +114,8 @@ function handleTwilioMessage(data: RawData) {
       session.latestMediaTimestamp = 0;
       session.lastAssistantItem = undefined;
       session.responseStartTimestamp = undefined;
+      // Start tracking the conversation
+      startConversation(session.streamSid!);
       tryConnectModel();
       break;
     case "media":
@@ -111,6 +133,9 @@ function handleTwilioMessage(data: RawData) {
       }
       break;
     case "close":
+      if (session.streamSid) {
+        endConversation(session.streamSid);
+      }
       closeAllConnections();
       break;
   }
@@ -129,10 +154,11 @@ function handleFrontendMessage(data: RawData) {
   }
 }
 
-function tryConnectModel() {
-  if (!session.twilioConn || !session.streamSid || !session.openAIApiKey)
-    return;
-  if (isOpen(session.modelConn)) return;
+const tryConnectModel = traceable(
+  function tryConnectModel() {
+    if (!session.twilioConn || !session.streamSid || !session.openAIApiKey)
+      return;
+    if (isOpen(session.modelConn)) return;
 
   // Determine WebSocket URL and headers based on Azure config
   let wsUrl: string;
@@ -235,9 +261,12 @@ CRITICAL REQUIREMENT: YOU MUST RESPOND IN THE EXACT SAME LANGUAGE AS THE USER'S 
     console.log("🔌 WebSocket closed. Code:", code, "Reason:", reason.toString());
     closeModel();
   });
-}
+  },
+  { name: "tryConnectModel", metadata: { type: "connection" } }
+);
 
-function handleModelMessage(data: RawData) {
+const handleModelMessage = traceable(
+  function handleModelMessage(data: RawData) {
   const event = parseMessage(data);
   if (!event) return;
 
@@ -268,10 +297,16 @@ function handleModelMessage(data: RawData) {
       
     case "conversation.item.input_audio_transcription.completed":
       console.log("🗣️ User said:", event.transcript);
+      if (session.streamSid) {
+        trackUserMessage(session.streamSid, event.transcript);
+      }
       break;
       
     case "response.audio_transcript.done":
       console.log("🤖 Assistant said:", event.transcript);
+      if (session.streamSid) {
+        trackAssistantMessage(session.streamSid, event.transcript);
+      }
       break;
       
     case "response.output_item.added":
@@ -321,6 +356,9 @@ function handleModelMessage(data: RawData) {
                 },
               });
               jsonSend(session.modelConn, { type: "response.create" });
+              if (session.streamSid) {
+                trackFunctionCall(session.streamSid, item.name, JSON.parse(item.arguments), output);
+              }
             }
           })
           .catch((err) => {
@@ -330,7 +368,9 @@ function handleModelMessage(data: RawData) {
       break;
     }
   }
-}
+  },
+  { name: "handleModelMessage", metadata: { type: "model-handler" } }
+);
 
 function handleTruncation() {
   if (

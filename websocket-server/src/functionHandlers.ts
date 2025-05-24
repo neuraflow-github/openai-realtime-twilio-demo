@@ -1,5 +1,6 @@
 import { FunctionHandler } from "./types";
 import axios from "axios";
+import { traceable } from "./tracing";
 
 const functions: FunctionHandler[] = [];
 
@@ -24,9 +25,12 @@ functions.push({
       required: ["a", "b"],
     },
   },
-  handler: async (args: { a: number; b: number }) => {
-    return JSON.stringify({ result: args.a + args.b });
-  },
+  handler: traceable(
+    async (args: { a: number; b: number }) => {
+      return JSON.stringify({ result: args.a + args.b });
+    },
+    { name: "add_function", metadata: { type: "math" } }
+  ),
 });
 
 // Add Tavily search function
@@ -51,30 +55,33 @@ functions.push({
       required: ["query"],
     },
   },
-  handler: async (args: { query: string; max_results?: number }) => {
-    try {
-      // You'll need to add your Tavily API key to the .env file
-      const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
-      if (!TAVILY_API_KEY) {
-        return JSON.stringify({ error: "Tavily API key not configured" });
+  handler: traceable(
+    async (args: { query: string; max_results?: number }) => {
+      try {
+        // You'll need to add your Tavily API key to the .env file
+        const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+        if (!TAVILY_API_KEY) {
+          return JSON.stringify({ error: "Tavily API key not configured" });
+        }
+
+        const response = await axios.post('https://api.tavily.com/search', {
+          api_key: TAVILY_API_KEY,
+          query: args.query,
+          max_results: args.max_results || 5,
+          include_answer: true,
+        });
+
+        return JSON.stringify({
+          answer: response.data.answer,
+          results: response.data.results
+        });
+      } catch (error) {
+        console.error("Tavily search error:", error);
+        return JSON.stringify({ error: "Search failed" });
       }
-
-      const response = await axios.post('https://api.tavily.com/search', {
-        api_key: TAVILY_API_KEY,
-        query: args.query,
-        max_results: args.max_results || 5,
-        include_answer: true,
-      });
-
-      return JSON.stringify({
-        answer: response.data.answer,
-        results: response.data.results
-      });
-    } catch (error) {
-      console.error("Tavily search error:", error);
-      return JSON.stringify({ error: "Search failed" });
-    }
-  },
+    },
+    { name: "tavily_search", metadata: { type: "search" } }
+  ),
 });
 
 // Keep the weather function as an example
@@ -96,14 +103,17 @@ functions.push({
       required: ["latitude", "longitude"],
     },
   },
-  handler: async (args: { latitude: number; longitude: number }) => {
-    const response = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${args.latitude}&longitude=${args.longitude}&current=temperature_2m,wind_speed_10m&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m`
-    );
-    const data = await response.json();
-    const currentTemp = data.current?.temperature_2m;
-    return JSON.stringify({ temp: currentTemp });
-  },
+  handler: traceable(
+    async (args: { latitude: number; longitude: number }) => {
+      const response = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${args.latitude}&longitude=${args.longitude}&current=temperature_2m,wind_speed_10m&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m`
+      );
+      const data = await response.json();
+      const currentTemp = data.current?.temperature_2m;
+      return JSON.stringify({ temp: currentTemp });
+    },
+    { name: "get_weather", metadata: { type: "weather" } }
+  ),
 });
 
 export default functions;

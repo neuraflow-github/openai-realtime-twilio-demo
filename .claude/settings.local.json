@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__tavily-mcp__tavily-search",
+      "mcp__tavily-mcp__tavily-extract",
+      "Bash(npm install:*)"
+    ],
+    "deny": []
+  }
+}
