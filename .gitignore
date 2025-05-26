@@ -75,3 +75,5 @@ logs
 # Temporary folders
 tmp/
 temp/
+# recordings
+recordings/

@@ -1,9 +1,9 @@
-import express from "express";
+import express, { Request, Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import dotenv from "dotenv";
 import http from "http";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import cors from "cors";
 import {
@@ -13,6 +13,7 @@ import {
 import functions from "./functionHandlers";
 import { AzureOpenAIConfig } from "./azureConfig";
 import { logLangSmithEvent } from "./tracing";
+import { recordingManager } from "./recordingManager";
 
 dotenv.config();
 
@@ -21,7 +22,7 @@ const PUBLIC_URL = process.env.PUBLIC_URL || "";
 
 // Azure or OpenAI configuration
 const USE_AZURE_OPENAI = process.env.USE_AZURE_OPENAI === "true";
-const OPENAI_API_KEY = USE_AZURE_OPENAI 
+const OPENAI_API_KEY = USE_AZURE_OPENAI
   ? (process.env.AZURE_OPENAI_API_KEY || "")
   : (process.env.OPENAI_API_KEY || "");
 
@@ -48,6 +49,23 @@ if (USE_AZURE_OPENAI) {
 if (USE_AZURE_OPENAI && (!azureConfig?.azureEndpoint || !azureConfig?.azureDeployment)) {
   console.error("AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT are required when USE_AZURE_OPENAI is true");
   process.exit(1);
+}
+
+// Recording configuration
+const ENABLE_RECORDING = process.env.ENABLE_RECORDING !== "false"; // Default to true
+const RECORDING_FORMAT = (process.env.RECORDING_FORMAT || "mp3") as "mp3" | "wav";
+const RECORDING_PROCESS = process.env.RECORDING_PROCESS !== "false"; // Default to true
+
+if (ENABLE_RECORDING) {
+  recordingManager.setOptions({
+    enableProcessing: RECORDING_PROCESS,
+    outputFormat: RECORDING_FORMAT
+  });
+  console.log("🎙️  Recording Configuration:");
+  console.log(`  Enabled: ${ENABLE_RECORDING}`);
+  console.log(`  Format: ${RECORDING_FORMAT}`);
+  console.log(`  Processing: ${RECORDING_PROCESS}`);
+  console.log(`  Directory: ${recordingManager.getRecordingsDirectory()}`);
 }
 
 const app = express();
@@ -82,6 +100,44 @@ app.all("/twiml", (req, res) => {
 // New endpoint to list available tools (schemas)
 app.get("/tools", (req, res) => {
   res.json(functions.map((f) => f.schema));
+});
+
+// Recording management endpoints
+app.get("/recordings", (_req: Request, res: Response): void => {
+  try {
+    const recordingsDir = recordingManager.getRecordingsDirectory();
+    if (!existsSync(recordingsDir)) {
+      res.json({ recordings: [] });
+      return;
+    }
+
+    const recordings = readdirSync(recordingsDir)
+      .filter((dir: string) => statSync(join(recordingsDir, dir)).isDirectory())
+      .map((dir: string) => {
+        const dirPath = join(recordingsDir, dir);
+        const files = readdirSync(dirPath);
+        const audioFiles = files.filter((f: string) =>
+          f.endsWith('.mp3') || f.endsWith('.wav') || f.endsWith('.raw')
+        );
+
+        return {
+          sessionId: dir.split('_')[0],
+          timestamp: dir.split('_').slice(1).join('_'),
+          directory: dir,
+          files: audioFiles,
+          path: dirPath
+        };
+      })
+      .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp));
+
+    res.json({
+      recordings,
+      recordingsDir,
+      activeRecordings: recordingManager.getActiveRecordings()
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list recordings' });
+  }
 });
 
 let currentCall: WebSocket | null = null;

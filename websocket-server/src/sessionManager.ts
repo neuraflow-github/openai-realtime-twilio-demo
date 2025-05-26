@@ -10,6 +10,7 @@ import {
   trackFunctionCall 
 } from "./conversationTracker";
 import { SYSTEM_PROMPT, INITIAL_GREETING, VOICE_CONFIG, CONVERSATION_CONFIG } from "./systemPrompt";
+import { recordingManager } from "./recordingManager";
 
 interface Session {
   twilioConn?: WebSocket;
@@ -42,6 +43,10 @@ export const handleCallConnection = traceable(
   ws.on("close", () => {
     if (session.streamSid) {
       endConversation(session.streamSid);
+      // Stop recording on unexpected close
+      if (process.env.ENABLE_RECORDING !== "false") {
+        recordingManager.stopRecording(session.streamSid);
+      }
     }
     cleanupConnection(session.modelConn);
     cleanupConnection(session.twilioConn);
@@ -117,10 +122,19 @@ function handleTwilioMessage(data: RawData) {
       session.responseStartTimestamp = undefined;
       // Start tracking the conversation
       startConversation(session.streamSid!);
+      // Start recording if enabled
+      if (process.env.ENABLE_RECORDING !== "false") {
+        recordingManager.startRecording(session.streamSid!);
+      }
       tryConnectModel();
       break;
     case "media":
       session.latestMediaTimestamp = msg.media.timestamp;
+      // Record inbound audio from Twilio
+      if (process.env.ENABLE_RECORDING !== "false" && session.streamSid && msg.media.payload) {
+        const audioBuffer = Buffer.from(msg.media.payload, 'base64');
+        recordingManager.writeInboundAudio(session.streamSid, audioBuffer);
+      }
       if (isOpen(session.modelConn)) {
         const audioEvent = {
           type: "input_audio_buffer.append",
@@ -136,6 +150,10 @@ function handleTwilioMessage(data: RawData) {
     case "close":
       if (session.streamSid) {
         endConversation(session.streamSid);
+        // Stop recording
+        if (process.env.ENABLE_RECORDING !== "false") {
+          recordingManager.stopRecording(session.streamSid);
+        }
       }
       closeAllConnections();
       break;
@@ -304,6 +322,12 @@ const handleModelMessage = traceable(
           console.log("🔊 Starting audio response");
         }
         if (event.item_id) session.lastAssistantItem = event.item_id;
+
+        // Record outbound audio from OpenAI
+        if (process.env.ENABLE_RECORDING !== "false" && event.delta) {
+          const audioBuffer = Buffer.from(event.delta, 'base64');
+          recordingManager.writeOutboundAudio(session.streamSid, audioBuffer);
+        }
 
         // Log periodically
         if (Math.random() < 0.1) {
