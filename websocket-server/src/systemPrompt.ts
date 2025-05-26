@@ -35,8 +35,8 @@ CRITICAL REQUIREMENT: YOU MUST RESPOND IN THE EXACT SAME LANGUAGE AS THE USER'S 
 // Initial greeting configuration
 export const INITIAL_GREETING = {
   enabled: true,
-  message: "Say a brief greeting in German, mentioning that you are an AI assistant for the city of Siegburg",
-  delayMs: 1000
+  message: "Say a very brief greeting in German, mentioning that you are the AI assistant for the city of Siegburg (use singular 'I am' not 'we are'). Keep it extremely short and concise.",
+  delayMs: 500
 };
 
 // Voice configuration
