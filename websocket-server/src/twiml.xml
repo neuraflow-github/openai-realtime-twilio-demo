@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Response>
+  <Play>https://aquamarine-seagull-4889.twil.io/assets/record.mp3</Play>
   <Connect>
     <Stream url="{{WS_URL}}" />
   </Connect>

@@ -1,5 +1,5 @@
 import { RawData, WebSocket } from "ws";
-import functions, { sessionControl } from "./functionHandlers";
+import functions, { sessionControl, getNonConsentFunctions, getOnlyConsentFunctions } from "./functionHandlers";
 import { AzureOpenAIConfig, getAzureRealtimeUrl, getAzureHeaders } from "./azureConfig";
 import { traceable, logLangSmithEvent } from "./tracing";
 import {
@@ -9,7 +9,7 @@ import {
   trackAssistantMessage,
   trackFunctionCall
 } from "./conversationTracker";
-import { SYSTEM_PROMPT, INITIAL_GREETING, VOICE_CONFIG, CONVERSATION_CONFIG } from "./systemPrompt";
+import { SYSTEM_PROMPT, SYSTEM_PROMPT_BASE, SYSTEM_PROMPT_WITH_CONSENT, INITIAL_GREETING, VOICE_CONFIG, CONVERSATION_CONFIG } from "./systemPrompt";
 import { recordingManager } from "./recordingManager";
 import { startTwilioRecording } from "./twilioRecording";
 import { getConsentDenialAudioChunks } from "./prerecordedAudio";
@@ -30,6 +30,7 @@ interface Session {
   audioChunkCount?: number;
   recordingSid?: string;
   callSid?: string;
+  consentHandled?: boolean;
 }
 
 // CRITICAL FIX: Use a Map to store sessions by streamSid instead of a single global session
@@ -203,6 +204,14 @@ async function handleTwilioMessage(data: RawData, sessionId: string) {
       session.responseStartTimestamp = undefined;
       session.audioDurationMs = undefined;
       session.audioChunkCount = undefined;
+      session.consentHandled = false;
+      
+      // Reset sessionControl flags for new session
+      sessionControl.consentHandled = false;
+      sessionControl.shouldUpdateFunctions = false;
+      sessionControl.shouldHangUp = false;
+      sessionControl.hangUpReason = "";
+      sessionControl.shouldPlayConsentDenialAudio = false;
 
       startConversation(session.streamSid!);
 
@@ -305,7 +314,9 @@ const tryConnectModel = traceable(
       console.log(`✅ WebSocket connected successfully for session ${session.streamSid}`);
       const config = session.saved_config || {};
 
-      const tools = functions.map(f => ({
+      // Initially, only provide consent-related functions
+      const consentFunctions = getOnlyConsentFunctions();
+      const tools = consentFunctions.map(f => ({
         type: "function",
         name: f.schema.name,
         description: f.schema.description,
@@ -323,13 +334,14 @@ const tryConnectModel = traceable(
           },
           input_audio_format: "g711_ulaw",
           output_audio_format: "g711_ulaw",
-          instructions: config.instructions || SYSTEM_PROMPT,
+          instructions: config.instructions || SYSTEM_PROMPT_WITH_CONSENT,
           tools: tools,
           ...config,
         },
       };
 
-      console.log("📤 Sending session config:", JSON.stringify(sessionConfig, null, 2));
+      console.log(`📤 Sending initial session config with ${tools.length} consent functions only`);
+      console.log("📤 Session config:", JSON.stringify(sessionConfig, null, 2));
       jsonSend(session.modelConn, sessionConfig);
 
       if (INITIAL_GREETING.enabled) {
@@ -488,7 +500,35 @@ const handleModelMessage = traceable(
                     output: JSON.stringify(output),
                   },
                 });
-                jsonSend(session.modelConn, { type: "response.create" });
+                
+                // Check if we need to update functions after consent handling
+                if (sessionControl.shouldUpdateFunctions && !session.consentHandled) {
+                  console.log(`🔄 Updating functions after consent handling for session ${session.streamSid}`);
+                  session.consentHandled = true;
+                  sessionControl.shouldUpdateFunctions = false;
+                  
+                  // Send updated session config without consent functions
+                  const nonConsentFunctions = getNonConsentFunctions();
+                  const tools = nonConsentFunctions.map(f => ({
+                    type: "function",
+                    name: f.schema.name,
+                    description: f.schema.description,
+                    parameters: f.schema.parameters
+                  }));
+                  
+                  const updateConfig = {
+                    type: "session.update",
+                    session: {
+                      instructions: SYSTEM_PROMPT_BASE,
+                      tools: tools
+                    }
+                  };
+                  
+                  console.log(`📤 Sending updated function list with ${tools.length} non-consent functions`);
+                  jsonSend(session.modelConn, updateConfig);
+                }
+                
+                // Track function call if we have a streamSid
                 if (session.streamSid) {
                   trackFunctionCall(session.streamSid, item.name, JSON.parse(item.arguments), output);
                 }
@@ -553,6 +593,10 @@ const handleModelMessage = traceable(
                   sessionControl.shouldHangUp = false;
                   sessionControl.hangUpReason = "";
                   sessionControl.shouldPlayConsentDenialAudio = false;
+                  // Note: We don't reset shouldUpdateFunctions or consentHandled here
+                } else {
+                  // Only send response.create if we're not hanging up
+                  jsonSend(session.modelConn, { type: "response.create" });
                 }
               }
             })

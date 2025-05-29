@@ -9,7 +9,7 @@ const unlink = promisify(fs.unlink);
 const mkdir = promisify(fs.mkdir);
 
 // Path to the pre-recorded consent denial message
-const CONSENT_DENIAL_AUDIO_PATH = path.join(__dirname, '..', 'assets', 'short.wav');
+const CONSENT_DENIAL_AUDIO_PATH = path.join(__dirname, '..', 'assets', 'end.mp3');
 
 // Cache for the converted audio chunks
 let consentDenialAudioChunks: string[] | null = null;

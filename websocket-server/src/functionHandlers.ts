@@ -8,7 +8,9 @@ const functions: FunctionHandler[] = [];
 export const sessionControl = {
   shouldHangUp: false,
   hangUpReason: "",
-  shouldPlayConsentDenialAudio: false
+  shouldPlayConsentDenialAudio: false,
+  consentHandled: false,
+  shouldUpdateFunctions: false
 };
 
 
@@ -50,6 +52,89 @@ functions.push({
   ),
 });
 
+// Add continue with consent function
+functions.push({
+  schema: {
+    name: "continue_with_consent",
+    type: "function",
+    description: "Continue the conversation after the user has given consent to record. Use this when the user agrees to recording (says 'ja', 'yes', or any affirmative response).",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  handler: traceableFunction(
+    async () => {
+      console.log(`[CONTINUE_WITH_CONSENT] User has given consent to record`);
+      console.log(`[CONTINUE_WITH_CONSENT] Before update - consentHandled: ${sessionControl.consentHandled}, shouldUpdateFunctions: ${sessionControl.shouldUpdateFunctions}`);
+      
+      // Mark consent as handled and trigger function update
+      sessionControl.consentHandled = true;
+      sessionControl.shouldUpdateFunctions = true;
+      
+      console.log(`[CONTINUE_WITH_CONSENT] After update - consentHandled: ${sessionControl.consentHandled}, shouldUpdateFunctions: ${sessionControl.shouldUpdateFunctions}`);
+      
+      return JSON.stringify({
+        status: "consent_granted",
+        action: "continue",
+        message: "Consent granted, continuing with normal conversation"
+      });
+    },
+    {
+      name: "continue_with_consent",
+      metadata: {
+        type: "consent_management",
+        description: "Continues conversation after consent is granted",
+        inputs: [],
+        outputs: ["status: string", "action: string", "message: string"]
+      }
+    }
+  ),
+});
+
+// Add clarify consent function
+functions.push({
+  schema: {
+    name: "clarify_consent",
+    type: "function",
+    description: "Ask for clarification when the user's response to the consent request is unclear. Use this when you cannot determine if the user is agreeing or declining to be recorded.",
+    parameters: {
+      type: "object",
+      properties: {
+        user_response: {
+          type: "string",
+          description: "The unclear response from the user"
+        }
+      },
+      required: ["user_response"],
+    },
+  },
+  handler: traceableFunction(
+    async (args: { user_response: string }) => {
+      console.log(`[CLARIFY_CONSENT] Unclear consent response: ${args.user_response}`);
+      console.log(`[CLARIFY_CONSENT] Current state - consentHandled: ${sessionControl.consentHandled}, shouldUpdateFunctions: ${sessionControl.shouldUpdateFunctions}`);
+      
+      // Note: We don't update any flags here - still in consent phase
+      
+      return JSON.stringify({
+        status: "clarification_needed",
+        action: "clarify",
+        message: "Please clarify if you consent to recording"
+      });
+    },
+    {
+      name: "clarify_consent",
+      metadata: {
+        type: "consent_management",
+        description: "Requests clarification for unclear consent responses",
+        inputs: ["user_response: string"],
+        outputs: ["status: string", "action: string", "message: string"]
+      }
+    }
+  ),
+});
+
 // Add hang up function for consent denial
 functions.push({
   schema: {
@@ -74,10 +159,12 @@ functions.push({
       // Set the hang up flag
       sessionControl.shouldHangUp = true;
       sessionControl.hangUpReason = args.reason;
-      
+
       // If consent denial, flag to play the pre-recorded audio
       if (args.reason === 'consent_denied') {
         sessionControl.shouldPlayConsentDenialAudio = true;
+        sessionControl.consentHandled = true;
+        sessionControl.shouldUpdateFunctions = true;
       }
 
       // Return confirmation that hang up has been initiated
@@ -217,5 +304,20 @@ functions.push({
     }
   ),
 });
+
+// Helper function to get consent-related functions
+export function getConsentFunctions() {
+  return ['hang_up_call', 'continue_with_consent', 'clarify_consent'];
+}
+
+// Helper function to get functions excluding consent-related ones
+export function getNonConsentFunctions() {
+  return functions.filter(f => !getConsentFunctions().includes(f.schema.name));
+}
+
+// Helper function to get ONLY consent-related functions
+export function getOnlyConsentFunctions() {
+  return functions.filter(f => getConsentFunctions().includes(f.schema.name));
+}
 
 export default functions;
