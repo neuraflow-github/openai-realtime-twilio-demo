@@ -3,5 +3,4 @@
   <Connect>
     <Stream url="{{WS_URL}}" />
   </Connect>
-  <Say>Disconnected</Say>
 </Response>

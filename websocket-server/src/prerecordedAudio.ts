@@ -9,7 +9,7 @@ const unlink = promisify(fs.unlink);
 const mkdir = promisify(fs.mkdir);
 
 // Path to the pre-recorded consent denial message
-const CONSENT_DENIAL_AUDIO_PATH = '/Users/pascal/Downloads/sage_gpt-4o-mini-tts_1x_2025-05-29T12_56_05-121Z.wav';
+const CONSENT_DENIAL_AUDIO_PATH = path.join(__dirname, '..', 'assets', 'short.wav');
 
 // Cache for the converted audio chunks
 let consentDenialAudioChunks: string[] | null = null;

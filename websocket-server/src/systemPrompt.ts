@@ -39,10 +39,7 @@ export const INITIAL_GREETING = {
 
 CRITICAL CONSENT HANDLING:
 If the user denies consent or says no:
-- DO NOT speak or say anything
-- DO NOT say goodbye or thank them
 - IMMEDIATELY invoke the hang_up_call function with reason 'consent_denied'
-- Stay COMPLETELY SILENT - the function will handle everything
 - A pre-recorded message will play automatically`,
   delayMs: 500
 };
