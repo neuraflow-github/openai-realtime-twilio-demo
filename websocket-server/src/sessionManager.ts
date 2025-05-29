@@ -23,11 +23,29 @@ interface Session {
   latestMediaTimestamp?: number;
   openAIApiKey?: string;
   azureConfig?: AzureOpenAIConfig;
-  audioDurationMs?: number;  // Track actual audio duration
-  audioChunkCount?: number;  // Count audio chunks to estimate duration
+  audioDurationMs?: number;
+  audioChunkCount?: number;
 }
 
-let session: Session = {};
+// CRITICAL FIX: Use a Map to store sessions by streamSid instead of a single global session
+const sessions = new Map<string, Session>();
+
+// Helper to get or create session
+function getSession(streamSid: string): Session {
+  if (!sessions.has(streamSid)) {
+    sessions.set(streamSid, {});
+  }
+  return sessions.get(streamSid)!;
+}
+
+// Helper to clean up session
+function removeSession(streamSid: string) {
+  const session = sessions.get(streamSid);
+  if (session) {
+    console.log(`🧹 Cleaning up session ${streamSid}`);
+    sessions.delete(streamSid);
+  }
+}
 
 export const handleCallConnection = traceable(
   async function handleCallConnection(
@@ -35,46 +53,70 @@ export const handleCallConnection = traceable(
     openAIApiKey: string,
     azureConfig?: AzureOpenAIConfig
   ) {
+    // Create a temporary session until we get the streamSid
+    const tempSessionId = `temp_${Date.now()}_${Math.random()}`;
+    let session = getSession(tempSessionId);
+
+    console.log(`📞 New call connection (temp ID: ${tempSessionId})`);
+
     cleanupConnection(session.twilioConn);
     session.twilioConn = ws;
     session.openAIApiKey = openAIApiKey;
     session.azureConfig = azureConfig;
 
-    ws.on("message", handleTwilioMessage);
+    ws.on("message", (data) => handleTwilioMessage(data, tempSessionId));
     ws.on("error", ws.close);
     ws.on("close", () => {
+      // Find the actual streamSid for this connection
+      let actualStreamSid = tempSessionId;
+
+      // Check if this temp session was moved to a real streamSid
+      sessions.forEach((sess, sid) => {
+        if (sess === session && sid !== tempSessionId) {
+          actualStreamSid = sid;
+        }
+      });
+
+      if (session.streamSid) {
+        actualStreamSid = session.streamSid;
+      }
+
+      console.log(`📞 Call disconnected (${actualStreamSid})`);
+
       if (session.streamSid) {
         endConversation(session.streamSid);
-        // Stop recording on unexpected close
         if (process.env.ENABLE_RECORDING !== "false") {
           recordingManager.stopRecording(session.streamSid);
         }
       }
+
       cleanupConnection(session.modelConn);
       cleanupConnection(session.twilioConn);
-      session.twilioConn = undefined;
-      session.modelConn = undefined;
-      session.streamSid = undefined;
-      session.lastAssistantItem = undefined;
-      session.responseStartTimestamp = undefined;
-      session.latestMediaTimestamp = undefined;
-      session.audioDurationMs = undefined;
-      session.audioChunkCount = undefined;
-      if (!session.frontendConn) session = {};
+      removeSession(tempSessionId);
+      removeSession(actualStreamSid);
     });
   },
   { name: "handleCallConnection", metadata: { type: "websocket-handler" } }
 );
 
-export function handleFrontendConnection(ws: WebSocket) {
+export function handleFrontendConnection(ws: WebSocket, streamSid?: string) {
+  if (!streamSid) {
+    console.warn("Frontend connection without streamSid");
+    ws.close();
+    return;
+  }
+
+  const session = getSession(streamSid);
   cleanupConnection(session.frontendConn);
   session.frontendConn = ws;
 
-  ws.on("message", handleFrontendMessage);
+  ws.on("message", (data) => handleFrontendMessage(data, session));
   ws.on("close", () => {
     cleanupConnection(session.frontendConn);
     session.frontendConn = undefined;
-    if (!session.twilioConn && !session.modelConn) session = {};
+    if (!session.twilioConn && !session.modelConn) {
+      removeSession(streamSid);
+    }
   });
 }
 
@@ -109,9 +151,16 @@ const handleFunctionCall = traceable(
   { name: "handleFunctionCall", metadata: { type: "function-call" } }
 );
 
-function handleTwilioMessage(data: RawData) {
+function handleTwilioMessage(data: RawData, sessionId: string) {
   const msg = parseMessage(data);
   if (!msg) return;
+
+  // Get the current session
+  let session = sessions.get(sessionId);
+  if (!session) {
+    console.error(`Session ${sessionId} not found!`);
+    return;
+  }
 
   // Only log non-media events to reduce noise
   if (msg.event !== "media") {
@@ -120,53 +169,61 @@ function handleTwilioMessage(data: RawData) {
 
   switch (msg.event) {
     case "start":
-      session.streamSid = msg.start.streamSid;
+      // Move session from temp ID to real streamSid
+      const realStreamSid = msg.start.streamSid;
+
+      // Remove from temp ID and add with real streamSid
+      sessions.delete(sessionId);
+      sessions.set(realStreamSid, session);
+
+      console.log(`🔄 Session moved from ${sessionId} to ${realStreamSid}`);
+
+      session.streamSid = realStreamSid;
       session.latestMediaTimestamp = 0;
       session.lastAssistantItem = undefined;
       session.responseStartTimestamp = undefined;
       session.audioDurationMs = undefined;
       session.audioChunkCount = undefined;
-      // Start tracking the conversation
+
       startConversation(session.streamSid!);
-      // Start recording if enabled
+
       if (process.env.ENABLE_RECORDING !== "false") {
         recordingManager.startRecording(session.streamSid!);
       }
-      tryConnectModel();
+
+      tryConnectModel(session);
       break;
+
     case "media":
       session.latestMediaTimestamp = msg.media.timestamp;
-      // Record inbound audio from Twilio
+
       if (process.env.ENABLE_RECORDING !== "false" && session.streamSid && msg.media.payload) {
         const audioBuffer = Buffer.from(msg.media.payload, 'base64');
         recordingManager.writeInboundAudio(session.streamSid, audioBuffer);
       }
+
       if (isOpen(session.modelConn)) {
         const audioEvent = {
           type: "input_audio_buffer.append",
           audio: msg.media.payload,
         };
-        // Log only periodically to avoid spam
-        if (Math.random() < 0.05) {
-          console.log("🎤 Sending audio chunk to model");
-        }
         jsonSend(session.modelConn, audioEvent);
       }
       break;
+
     case "close":
       if (session.streamSid) {
         endConversation(session.streamSid);
-        // Stop recording
         if (process.env.ENABLE_RECORDING !== "false") {
           recordingManager.stopRecording(session.streamSid);
         }
       }
-      closeAllConnections();
+      closeAllConnections(session);
       break;
   }
 }
 
-function handleFrontendMessage(data: RawData) {
+function handleFrontendMessage(data: RawData, session: Session) {
   const msg = parseMessage(data);
   if (!msg) return;
 
@@ -180,35 +237,33 @@ function handleFrontendMessage(data: RawData) {
 }
 
 const tryConnectModel = traceable(
-  function tryConnectModel() {
+  function tryConnectModel(session: Session) {
     if (!session.twilioConn || !session.streamSid || !session.openAIApiKey)
       return;
     if (isOpen(session.modelConn)) return;
 
-    // Determine WebSocket URL and headers based on Azure config
     let wsUrl: string;
     let headers: Record<string, string>;
 
     if (session.azureConfig?.useAzure) {
       wsUrl = getAzureRealtimeUrl(session.azureConfig);
       headers = getAzureHeaders(session.openAIApiKey);
-      console.log("Connecting to Azure OpenAI:", wsUrl);
+      console.log(`Connecting to Azure OpenAI for session ${session.streamSid}:`, wsUrl);
     } else {
       wsUrl = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17";
       headers = {
         Authorization: `Bearer ${session.openAIApiKey}`,
         "OpenAI-Beta": "realtime=v1",
       };
-      console.log("Connecting to OpenAI:", wsUrl);
+      console.log(`Connecting to OpenAI for session ${session.streamSid}:`, wsUrl);
     }
 
     session.modelConn = new WebSocket(wsUrl, { headers });
 
     session.modelConn.on("open", () => {
-      console.log("✅ WebSocket connected successfully");
+      console.log(`✅ WebSocket connected successfully for session ${session.streamSid}`);
       const config = session.saved_config || {};
 
-      // Register available tools
       const tools = functions.map(f => ({
         type: "function",
         name: f.schema.name,
@@ -232,14 +287,14 @@ const tryConnectModel = traceable(
           ...config,
         },
       };
+
       console.log("📤 Sending session config:", JSON.stringify(sessionConfig, null, 2));
       jsonSend(session.modelConn, sessionConfig);
 
-      // Send a greeting message to start the conversation if enabled
       if (INITIAL_GREETING.enabled) {
         setTimeout(() => {
           if (isOpen(session.modelConn)) {
-            console.log("👋 Sending greeting message");
+            console.log(`👋 Sending greeting message for session ${session.streamSid}`);
             jsonSend(session.modelConn, {
               type: "conversation.item.create",
               item: {
@@ -260,46 +315,39 @@ const tryConnectModel = traceable(
       }
     });
 
-    session.modelConn.on("message", handleModelMessage);
+    session.modelConn.on("message", (data) => handleModelMessage(data, session));
     session.modelConn.on("error", (error) => {
-      console.error("❌ WebSocket error:", error);
-      closeModel();
+      console.error(`❌ WebSocket error for session ${session.streamSid}:`, error);
+      closeModel(session);
     });
     session.modelConn.on("close", (code, reason) => {
-      console.log("🔌 WebSocket closed. Code:", code, "Reason:", reason.toString());
-      closeModel();
+      console.log(`🔌 WebSocket closed for session ${session.streamSid}. Code:`, code, "Reason:", reason.toString());
+      closeModel(session);
     });
   },
   { name: "tryConnectModel", metadata: { type: "connection" } }
 );
 
 const handleModelMessage = traceable(
-  function handleModelMessage(data: RawData) {
+  function handleModelMessage(data: RawData, session: Session) {
     const event = parseMessage(data);
     if (!event) return;
 
-    console.log("🤖 Model event:", event.type);
-    if (event.type === "error") {
-      console.error("❌ Model error:", JSON.stringify(event, null, 2));
+    console.log(`🤖 Model event [${session.streamSid}]:`, event.type);
 
-      // Handle truncation-specific errors gracefully
+    if (event.type === "error") {
+      console.error(`❌ Model error [${session.streamSid}]:`, JSON.stringify(event, null, 2));
+
       if (event.error?.type === "invalid_value" &&
         event.error?.message?.includes("Audio content") &&
         event.error?.message?.includes("shorter than")) {
-        console.warn("⚠️ Truncation timing error detected - audio was shorter than expected");
-        console.log("📊 Error details:", {
-          code: event.error.code,
-          message: event.error.message,
-          param: event.error.param
-        });
+        console.warn(`⚠️ Truncation timing error detected for session ${session.streamSid}`);
 
-        // Reset audio state to recover gracefully
         session.lastAssistantItem = undefined;
         session.responseStartTimestamp = undefined;
         session.audioDurationMs = undefined;
         session.audioChunkCount = undefined;
 
-        // Clear Twilio buffer to ensure clean state
         if (session.twilioConn && session.streamSid && isOpen(session.twilioConn)) {
           jsonSend(session.twilioConn, {
             event: "clear",
@@ -307,9 +355,6 @@ const handleModelMessage = traceable(
           });
           console.log("🧹 Cleared Twilio buffer after truncation error");
         }
-
-        console.log("✅ Recovered from truncation error - conversation can continue");
-        // Don't propagate this error further - we've handled it
         return;
       }
     }
@@ -318,38 +363,38 @@ const handleModelMessage = traceable(
 
     switch (event.type) {
       case "input_audio_buffer.speech_started":
-        console.log("🗣️ User started speaking");
-        handleTruncation();
+        console.log(`🗣️ User started speaking [${session.streamSid}]`);
+        handleTruncation(session);
         break;
 
       case "input_audio_buffer.speech_stopped":
-        console.log("🤐 User stopped speaking");
+        console.log(`🤐 User stopped speaking [${session.streamSid}]`);
         break;
 
       case "response.done":
-        console.log("✅ Response completed");
+        console.log(`✅ Response completed [${session.streamSid}]`);
         break;
 
       case "session.created":
-        console.log("📝 Session created:", JSON.stringify(event, null, 2));
+        console.log(`📝 Session created [${session.streamSid}]:`, JSON.stringify(event, null, 2));
         break;
 
       case "conversation.item.input_audio_transcription.completed":
-        console.log("🗣️ User said:", event.transcript);
+        console.log(`🗣️ User said [${session.streamSid}]:`, event.transcript);
         if (session.streamSid) {
           trackUserMessage(session.streamSid, event.transcript);
         }
         break;
 
       case "response.audio_transcript.done":
-        console.log("🤖 Assistant said:", event.transcript);
+        console.log(`🤖 Assistant said [${session.streamSid}]:`, event.transcript);
         if (session.streamSid) {
           trackAssistantMessage(session.streamSid, event.transcript);
         }
         break;
 
       case "response.output_item.added":
-        console.log("➕ Output item added:", event.item?.type);
+        console.log(`➕ Output item added [${session.streamSid}]:`, event.item?.type);
         break;
 
       case "response.audio.delta":
@@ -358,27 +403,18 @@ const handleModelMessage = traceable(
             session.responseStartTimestamp = session.latestMediaTimestamp || 0;
             session.audioDurationMs = 0;
             session.audioChunkCount = 0;
-            console.log("🔊 Starting audio response");
+            console.log(`🔊 Starting audio response [${session.streamSid}]`);
           }
           if (event.item_id) session.lastAssistantItem = event.item_id;
-          
-          // Track audio duration based on chunks (g711 ulaw: 8kHz, base64 encoded)
-          // Each chunk represents ~20ms of audio at 8kHz
+
           if (event.delta) {
             session.audioChunkCount = (session.audioChunkCount || 0) + 1;
-            // Rough estimate: each chunk is ~20ms of audio
             session.audioDurationMs = (session.audioChunkCount || 0) * 20;
           }
 
-          // Record outbound audio from OpenAI
           if (process.env.ENABLE_RECORDING !== "false" && event.delta) {
             const audioBuffer = Buffer.from(event.delta, 'base64');
             recordingManager.writeOutboundAudio(session.streamSid, audioBuffer);
-          }
-
-          // Log periodically
-          if (Math.random() < 0.1) {
-            console.log("🔊 Sending audio to Twilio");
           }
 
           jsonSend(session.twilioConn, {
@@ -392,7 +428,7 @@ const handleModelMessage = traceable(
             streamSid: session.streamSid,
           });
         } else {
-          console.warn("⚠️ No Twilio connection for audio output");
+          console.warn(`⚠️ No Twilio connection for audio output [${session.streamSid}]`);
         }
         break;
 
@@ -427,7 +463,7 @@ const handleModelMessage = traceable(
   { name: "handleModelMessage", metadata: { type: "model-handler" } }
 );
 
-function handleTruncation() {
+function handleTruncation(session: Session) {
   if (
     !session.lastAssistantItem ||
     session.responseStartTimestamp === undefined
@@ -438,11 +474,9 @@ function handleTruncation() {
     (session.latestMediaTimestamp || 0) - (session.responseStartTimestamp || 0);
   const audio_end_ms = elapsedMs > 0 ? elapsedMs : 0;
 
-  // Add minimum threshold to avoid truncating very short audio
   const MIN_TRUNCATION_MS = 100;
   if (audio_end_ms < MIN_TRUNCATION_MS) {
     console.log(`⚠️ Skipping truncation: audio too short (${audio_end_ms}ms < ${MIN_TRUNCATION_MS}ms)`);
-    // Still reset the session state
     session.lastAssistantItem = undefined;
     session.responseStartTimestamp = undefined;
     session.audioDurationMs = undefined;
@@ -452,24 +486,13 @@ function handleTruncation() {
 
   console.log(`✂️ Attempting truncation at ${audio_end_ms}ms - lastItem: ${session.lastAssistantItem}`);
 
-  // Log debugging information
-  console.log(`🔍 Truncation Debug:
-    - Latest Media Timestamp: ${session.latestMediaTimestamp}ms
-    - Response Start Timestamp: ${session.responseStartTimestamp}ms
-    - Calculated Audio End: ${audio_end_ms}ms
-    - Estimated Audio Duration: ${session.audioDurationMs}ms
-    - Audio Chunk Count: ${session.audioChunkCount}
-    - Last Assistant Item: ${session.lastAssistantItem}`);
-    
-  // Additional safety check: don't truncate if calculated time exceeds estimated duration
   if (session.audioDurationMs && audio_end_ms > session.audioDurationMs + 100) {
     console.warn(`⚠️ Skipping truncation: calculated time (${audio_end_ms}ms) exceeds estimated duration (${session.audioDurationMs}ms)`);
-    // Reset state and clear buffer anyway
     session.lastAssistantItem = undefined;
     session.responseStartTimestamp = undefined;
     session.audioDurationMs = undefined;
     session.audioChunkCount = undefined;
-    
+
     if (session.twilioConn && session.streamSid && isOpen(session.twilioConn)) {
       jsonSend(session.twilioConn, {
         event: "clear",
@@ -481,7 +504,6 @@ function handleTruncation() {
 
   if (session.modelConn && isOpen(session.modelConn)) {
     try {
-      // Send truncation request to OpenAI
       jsonSend(session.modelConn, {
         type: "conversation.item.truncate",
         item_id: session.lastAssistantItem,
@@ -492,11 +514,9 @@ function handleTruncation() {
       console.log(`✅ Truncation request sent successfully for ${audio_end_ms}ms`);
     } catch (error) {
       console.error("❌ Error sending truncation request:", error);
-      // Continue with cleanup even if truncation fails
     }
   }
 
-  // Clear Twilio audio buffer regardless of truncation success
   if (session.twilioConn && session.streamSid && isOpen(session.twilioConn)) {
     try {
       jsonSend(session.twilioConn, {
@@ -509,7 +529,6 @@ function handleTruncation() {
     }
   }
 
-  // Reset session state to ensure clean state for next response
   session.lastAssistantItem = undefined;
   session.responseStartTimestamp = undefined;
   session.audioDurationMs = undefined;
@@ -517,13 +536,13 @@ function handleTruncation() {
   console.log("🔄 Reset session audio state");
 }
 
-function closeModel() {
+function closeModel(session: Session) {
   cleanupConnection(session.modelConn);
   session.modelConn = undefined;
-  if (!session.twilioConn && !session.frontendConn) session = {};
+  // Don't remove session here - let the main connection handle cleanup
 }
 
-function closeAllConnections() {
+function closeAllConnections(session: Session) {
   if (session.twilioConn) {
     session.twilioConn.close();
     session.twilioConn = undefined;

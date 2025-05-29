@@ -140,7 +140,7 @@ app.get("/recordings", (_req: Request, res: Response): void => {
   }
 });
 
-let currentCall: WebSocket | null = null;
+const activeCalls: Map<string, WebSocket> = new Map();
 let currentLogs: WebSocket | null = null;
 
 wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
@@ -155,9 +155,14 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const type = parts[0];
 
   if (type === "call") {
-    if (currentCall) currentCall.close();
-    currentCall = ws;
-    handleCallConnection(currentCall, OPENAI_API_KEY, azureConfig);
+    const callId = `call_${Date.now()}_${Math.random()}`;
+    activeCalls.set(callId, ws);
+
+    handleCallConnection(ws, OPENAI_API_KEY, azureConfig);
+
+    ws.on('close', () => {
+      activeCalls.delete(callId);
+    });
     console.log(`Using ${USE_AZURE_OPENAI ? 'Azure OpenAI' : 'OpenAI'} for voice calls`);
   } else if (type === "logs") {
     if (currentLogs) currentLogs.close();

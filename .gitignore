@@ -75,5 +75,19 @@ logs
 # Temporary folders
 tmp/
 temp/
+
 # recordings
 recordings/
+
+# wav files
+*.wav
+*.ulaw
+*.gsm
+*.mp3
+*.m4a
+*.ogg
+*.flac
+*.aac
+*.m4a
+*.ogg
+*.flac
