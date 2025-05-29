@@ -35,19 +35,26 @@ CRITICAL REQUIREMENT: YOU MUST RESPOND IN THE EXACT SAME LANGUAGE AS THE USER'S 
 // Initial greeting configuration
 export const INITIAL_GREETING = {
   enabled: true,
-  message: "Say a very brief greeting in German, mentioning that you are the AI assistant for the city of Siegburg (use singular 'I am' not 'we are'). Keep it extremely short and concise.",
+  message: `Say a very brief greeting in German, mentioning that you are the AI assistant for the city of Siegburg (use singular 'I am' not 'we are'). Then immediately ask for consent to record the conversation for quality and training purposes. Keep it extremely short and concise.
+
+CRITICAL CONSENT HANDLING:
+If the user denies consent or says no:
+- DO NOT speak or say anything
+- DO NOT say goodbye or thank them
+- IMMEDIATELY invoke the hang_up_call function with reason 'consent_denied'
+- Stay COMPLETELY SILENT - the function will handle everything
+- A pre-recorded message will play automatically`,
   delayMs: 500
 };
 
 // Voice configuration
 export const VOICE_CONFIG = {
   voice: "sage", // Options: "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"
-  speed: 1.2 // Speed of speech (0.25 to 4.0)
 };
 
 // You can add more configuration options here as needed
 export const CONVERSATION_CONFIG = {
   maxConversationDurationMs: 10 * 60 * 1000, // 10 minutes
   enableTranscription: true,
-  transcriptionModel: "whisper-1"
+  transcriptionModel: "gpt-4o-transcribe"
 };

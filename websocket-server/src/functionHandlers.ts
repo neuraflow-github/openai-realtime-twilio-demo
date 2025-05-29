@@ -4,6 +4,13 @@ import { traceableFunction } from "./tracing";
 
 const functions: FunctionHandler[] = [];
 
+// Special session object to signal hang up from function handlers
+export const sessionControl = {
+  shouldHangUp: false,
+  hangUpReason: "",
+  shouldPlayConsentDenialAudio: false
+};
+
 
 // Add PII detection function
 functions.push({
@@ -38,6 +45,55 @@ functions.push({
         description: "Handles statements containing personally identifiable information",
         inputs: ["statement: string"],
         outputs: ["message: string"]
+      }
+    }
+  ),
+});
+
+// Add hang up function for consent denial
+functions.push({
+  schema: {
+    name: "hang_up_call",
+    type: "function",
+    description: "Hang up the call. IMPORTANT: Do NOT speak or say anything before invoking this function. For consent denial, invoke this IMMEDIATELY and SILENTLY - a pre-recorded message will be played automatically.",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: {
+          type: "string",
+          description: "The reason for hanging up (e.g., 'consent_denied', 'user_request')"
+        }
+      },
+      required: ["reason"],
+    },
+  },
+  handler: traceableFunction(
+    async (args: { reason: string }) => {
+      console.log(`[HANG_UP] Hanging up call - Reason: ${args.reason}`);
+
+      // Set the hang up flag
+      sessionControl.shouldHangUp = true;
+      sessionControl.hangUpReason = args.reason;
+      
+      // If consent denial, flag to play the pre-recorded audio
+      if (args.reason === 'consent_denied') {
+        sessionControl.shouldPlayConsentDenialAudio = true;
+      }
+
+      // Return confirmation that hang up has been initiated
+      return JSON.stringify({
+        status: "hang_up_initiated",
+        action: "hang_up",
+        reason: args.reason
+      });
+    },
+    {
+      name: "hang_up_call",
+      metadata: {
+        type: "call_control",
+        description: "Hangs up the call",
+        inputs: ["reason: string"],
+        outputs: ["message: string", "action: string", "reason: string"]
       }
     }
   ),

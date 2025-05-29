@@ -1,5 +1,5 @@
 import { RawData, WebSocket } from "ws";
-import functions from "./functionHandlers";
+import functions, { sessionControl } from "./functionHandlers";
 import { AzureOpenAIConfig, getAzureRealtimeUrl, getAzureHeaders } from "./azureConfig";
 import { traceable, logLangSmithEvent } from "./tracing";
 import {
@@ -12,6 +12,7 @@ import {
 import { SYSTEM_PROMPT, INITIAL_GREETING, VOICE_CONFIG, CONVERSATION_CONFIG } from "./systemPrompt";
 import { recordingManager } from "./recordingManager";
 import { startTwilioRecording } from "./twilioRecording";
+import { getConsentDenialAudioChunks } from "./prerecordedAudio";
 
 interface Session {
   twilioConn?: WebSocket;
@@ -490,6 +491,68 @@ const handleModelMessage = traceable(
                 jsonSend(session.modelConn, { type: "response.create" });
                 if (session.streamSid) {
                   trackFunctionCall(session.streamSid, item.name, JSON.parse(item.arguments), output);
+                }
+                
+                // Check if we need to hang up the call
+                if (sessionControl.shouldHangUp) {
+                  console.log(`📞 Hanging up call for session ${session.streamSid} - Reason: ${sessionControl.hangUpReason}`);
+                  
+                  // Close the OpenAI connection immediately to prevent any AI speech
+                  if (session.modelConn && isOpen(session.modelConn)) {
+                    console.log(`🔌 Closing OpenAI connection immediately`);
+                    session.modelConn.close();
+                    session.modelConn = undefined;
+                  }
+                  
+                  // Play consent denial audio if needed
+                  if (sessionControl.shouldPlayConsentDenialAudio && session.twilioConn && session.streamSid) {
+                    console.log(`🎵 Playing consent denial pre-recorded message`);
+                    
+                    getConsentDenialAudioChunks()
+                      .then((audioChunks) => {
+                        // Play all audio chunks with 20ms spacing
+                        audioChunks.forEach((chunk, index) => {
+                          setTimeout(() => {
+                            if (isOpen(session.twilioConn)) {
+                              jsonSend(session.twilioConn, {
+                                event: "media",
+                                streamSid: session.streamSid,
+                                media: { payload: chunk },
+                              });
+                            }
+                          }, index * 20);
+                        });
+                        
+                        // Calculate total audio duration and hang up after completion
+                        const audioDurationMs = audioChunks.length * 20;
+                        const hangupDelayMs = audioDurationMs + 1000; // 1 second buffer
+                        
+                        setTimeout(() => {
+                          if (session.twilioConn && isOpen(session.twilioConn)) {
+                            console.log(`🔌 Closing Twilio connection after audio playback`);
+                            session.twilioConn.close();
+                          }
+                        }, hangupDelayMs);
+                      })
+                      .catch((error) => {
+                        console.error(`❌ Failed to play consent denial audio:`, error);
+                        // Hang up immediately on error
+                        if (session.twilioConn && isOpen(session.twilioConn)) {
+                          session.twilioConn.close();
+                        }
+                      });
+                  } else {
+                    // For other hangup reasons, close immediately
+                    if (session.twilioConn && isOpen(session.twilioConn)) {
+                      console.log(`🔌 Closing Twilio connection`);
+                      session.twilioConn.close();
+                    }
+                  }
+                  
+                  // Reset the control flags
+                  sessionControl.shouldHangUp = false;
+                  sessionControl.hangUpReason = "";
+                  sessionControl.shouldPlayConsentDenialAudio = false;
                 }
               }
             })

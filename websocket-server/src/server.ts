@@ -14,6 +14,7 @@ import functions from "./functionHandlers";
 import { AzureOpenAIConfig } from "./azureConfig";
 import { logLangSmithEvent } from "./tracing";
 import { recordingManager } from "./recordingManager";
+import { preloadAudio } from "./prerecordedAudio";
 
 dotenv.config();
 
@@ -195,8 +196,12 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  
+  // Preload the consent denial audio
+  await preloadAudio();
+  
   if (process.env.LANGSMITH_TRACING === "true") {
     console.log("🦜 LangSmith tracing enabled");
     console.log(`📊 Project: ${process.env.LANGSMITH_PROJECT}`);
