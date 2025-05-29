@@ -80,6 +80,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 
 const twimlPath = join(__dirname, "twiml.xml");
 const twimlTemplate = readFileSync(twimlPath, "utf-8");
@@ -100,6 +101,27 @@ app.all("/twiml", (req, res) => {
 // New endpoint to list available tools (schemas)
 app.get("/tools", (req, res) => {
   res.json(functions.map((f) => f.schema));
+});
+
+// Recording callback endpoint
+app.post('/recording-callback', (req: Request, res: Response) => {
+  const { RecordingSid, RecordingUrl, RecordingStatus, RecordingDuration, CallSid } = req.body;
+  
+  console.log(`📼 Recording Status Update:`, {
+    callSid: CallSid,
+    recordingSid: RecordingSid,
+    status: RecordingStatus,
+    duration: RecordingDuration,
+    url: RecordingUrl
+  });
+
+  // Store recording metadata in your database or file system
+  if (RecordingStatus === 'completed') {
+    // You can download and store the recording here if needed
+    // The recording URL will be: RecordingUrl + '.mp3' or '.wav'
+  }
+
+  res.status(200).send('OK');
 });
 
 // Recording management endpoints

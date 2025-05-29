@@ -11,12 +11,14 @@ import {
 } from "./conversationTracker";
 import { SYSTEM_PROMPT, INITIAL_GREETING, VOICE_CONFIG, CONVERSATION_CONFIG } from "./systemPrompt";
 import { recordingManager } from "./recordingManager";
+import { startTwilioRecording } from "./twilioRecording";
 
 interface Session {
   twilioConn?: WebSocket;
   frontendConn?: WebSocket;
   modelConn?: WebSocket;
   streamSid?: string;
+  tempSessionId?: string;
   saved_config?: any;
   lastAssistantItem?: string;
   responseStartTimestamp?: number;
@@ -25,6 +27,8 @@ interface Session {
   azureConfig?: AzureOpenAIConfig;
   audioDurationMs?: number;
   audioChunkCount?: number;
+  recordingSid?: string;
+  callSid?: string;
 }
 
 // CRITICAL FIX: Use a Map to store sessions by streamSid instead of a single global session
@@ -56,6 +60,9 @@ export const handleCallConnection = traceable(
     // Create a temporary session until we get the streamSid
     const tempSessionId = `temp_${Date.now()}_${Math.random()}`;
     let session = getSession(tempSessionId);
+    
+    // Store the temp session ID in the session object for tracking
+    session.tempSessionId = tempSessionId;
 
     console.log(`📞 New call connection (temp ID: ${tempSessionId})`);
 
@@ -64,7 +71,15 @@ export const handleCallConnection = traceable(
     session.openAIApiKey = openAIApiKey;
     session.azureConfig = azureConfig;
 
-    ws.on("message", (data) => handleTwilioMessage(data, tempSessionId));
+    // Store the session reference on the WebSocket for message handling
+    (ws as any).sessionRef = session;
+
+    ws.on("message", (data) => {
+      // Get the current session reference from the WebSocket
+      const currentSession = (ws as any).sessionRef as Session;
+      const sessionId = currentSession.streamSid || currentSession.tempSessionId || tempSessionId;
+      handleTwilioMessage(data, sessionId);
+    });
     ws.on("error", ws.close);
     ws.on("close", () => {
       // Find the actual streamSid for this connection
@@ -85,7 +100,8 @@ export const handleCallConnection = traceable(
 
       if (session.streamSid) {
         endConversation(session.streamSid);
-        if (process.env.ENABLE_RECORDING !== "false") {
+        // Only stop local recording if not using Twilio recording
+        if (process.env.ENABLE_RECORDING !== "false" && !process.env.PUBLIC_URL) {
           recordingManager.stopRecording(session.streamSid);
         }
       }
@@ -151,7 +167,7 @@ const handleFunctionCall = traceable(
   { name: "handleFunctionCall", metadata: { type: "function-call" } }
 );
 
-function handleTwilioMessage(data: RawData, sessionId: string) {
+async function handleTwilioMessage(data: RawData, sessionId: string) {
   const msg = parseMessage(data);
   if (!msg) return;
 
@@ -171,6 +187,7 @@ function handleTwilioMessage(data: RawData, sessionId: string) {
     case "start":
       // Move session from temp ID to real streamSid
       const realStreamSid = msg.start.streamSid;
+      const callSid = msg.start.callSid; // Extract callSid
 
       // Remove from temp ID and add with real streamSid
       sessions.delete(sessionId);
@@ -179,6 +196,7 @@ function handleTwilioMessage(data: RawData, sessionId: string) {
       console.log(`🔄 Session moved from ${sessionId} to ${realStreamSid}`);
 
       session.streamSid = realStreamSid;
+      session.callSid = callSid;
       session.latestMediaTimestamp = 0;
       session.lastAssistantItem = undefined;
       session.responseStartTimestamp = undefined;
@@ -187,8 +205,28 @@ function handleTwilioMessage(data: RawData, sessionId: string) {
 
       startConversation(session.streamSid!);
 
+      // Start recording based on ENABLE_RECORDING configuration
       if (process.env.ENABLE_RECORDING !== "false") {
-        recordingManager.startRecording(session.streamSid!);
+        // Use Twilio recording if PUBLIC_URL is set, otherwise use local recording
+        if (process.env.PUBLIC_URL) {
+          try {
+            const recordingData = await startTwilioRecording({
+              callSid: callSid,
+              recordingStatusCallback: `${process.env.PUBLIC_URL}/recording-callback`,
+              recordingStatusCallbackEvent: ['in-progress', 'completed', 'absent'],
+              recordingChannels: 'mono', // Records both sides mixed into one channel
+              trim: 'trim-silence'
+            });
+            
+            console.log(`🎙️ Twilio recording started:`, recordingData);
+            session.recordingSid = recordingData.sid;
+          } catch (error) {
+            console.error(`❌ Failed to start Twilio recording:`, error);
+          }
+        } else {
+          // Fall back to local recording
+          recordingManager.startRecording(session.streamSid!);
+        }
       }
 
       tryConnectModel(session);
@@ -197,7 +235,8 @@ function handleTwilioMessage(data: RawData, sessionId: string) {
     case "media":
       session.latestMediaTimestamp = msg.media.timestamp;
 
-      if (process.env.ENABLE_RECORDING !== "false" && session.streamSid && msg.media.payload) {
+      // Only do local recording if not using Twilio recording
+      if (process.env.ENABLE_RECORDING !== "false" && !process.env.PUBLIC_URL && session.streamSid && msg.media.payload) {
         const audioBuffer = Buffer.from(msg.media.payload, 'base64');
         recordingManager.writeInboundAudio(session.streamSid, audioBuffer);
       }
@@ -214,7 +253,8 @@ function handleTwilioMessage(data: RawData, sessionId: string) {
     case "close":
       if (session.streamSid) {
         endConversation(session.streamSid);
-        if (process.env.ENABLE_RECORDING !== "false") {
+        // Only stop local recording if not using Twilio recording
+        if (process.env.ENABLE_RECORDING !== "false" && !process.env.PUBLIC_URL) {
           recordingManager.stopRecording(session.streamSid);
         }
       }
@@ -412,7 +452,8 @@ const handleModelMessage = traceable(
             session.audioDurationMs = (session.audioChunkCount || 0) * 20;
           }
 
-          if (process.env.ENABLE_RECORDING !== "false" && event.delta) {
+          // Only do local recording if not using Twilio recording
+          if (process.env.ENABLE_RECORDING !== "false" && !process.env.PUBLIC_URL && event.delta) {
             const audioBuffer = Buffer.from(event.delta, 'base64');
             recordingManager.writeOutboundAudio(session.streamSid, audioBuffer);
           }

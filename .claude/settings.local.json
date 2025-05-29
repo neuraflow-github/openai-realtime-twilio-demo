@@ -5,7 +5,8 @@
       "mcp__tavily-mcp__tavily-extract",
       "Bash(npm install:*)",
       "Bash(mkdir:*)",
-      "WebFetch(domain:docs.smith.langchain.com)"
+      "WebFetch(domain:docs.smith.langchain.com)",
+      "Bash(git stash show:*)"
     ],
     "deny": []
   }
