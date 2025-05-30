@@ -31,6 +31,7 @@ interface Session {
   recordingSid?: string;
   callSid?: string;
   consentHandled?: boolean;
+  localRecordingStarted?: boolean;
 }
 
 // CRITICAL FIX: Use a Map to store sessions by streamSid instead of a single global session
@@ -204,6 +205,7 @@ async function handleTwilioMessage(data: RawData, sessionId: string) {
       session.responseStartTimestamp = undefined;
       session.audioDurationMs = undefined;
       session.audioChunkCount = undefined;
+      session.localRecordingStarted = false;
       
       // Check if consent handling is disabled
       const disableConsentHandling = process.env.DISABLE_CONSENT_HANDLING === "true";
@@ -219,27 +221,33 @@ async function handleTwilioMessage(data: RawData, sessionId: string) {
 
       startConversation(session.streamSid!);
 
-      // Start recording based on ENABLE_RECORDING configuration
+      // Start recording based on consent handling configuration
       if (process.env.ENABLE_RECORDING !== "false") {
-        // Use Twilio recording if PUBLIC_URL is set, otherwise use local recording
-        if (process.env.PUBLIC_URL) {
-          try {
-            const recordingData = await startTwilioRecording({
-              callSid: callSid,
-              recordingStatusCallback: `${process.env.PUBLIC_URL}/recording-callback`,
-              recordingStatusCallbackEvent: ['in-progress', 'completed', 'absent'],
-              recordingChannels: 'mono', // Records both sides mixed into one channel
-              trim: 'trim-silence'
-            });
-            
-            console.log(`🎙️ Twilio recording started:`, recordingData);
-            session.recordingSid = recordingData.sid;
-          } catch (error) {
-            console.error(`❌ Failed to start Twilio recording:`, error);
+        // Only start recording immediately if consent handling is disabled
+        if (disableConsentHandling) {
+          console.log(`🎙️ Starting recording immediately (consent handling disabled)`);
+          if (process.env.PUBLIC_URL) {
+            try {
+              const recordingData = await startTwilioRecording({
+                callSid: callSid,
+                recordingStatusCallback: `${process.env.PUBLIC_URL}/recording-callback`,
+                recordingStatusCallbackEvent: ['in-progress', 'completed', 'absent'],
+                recordingChannels: 'mono', // Records both sides mixed into one channel
+                trim: 'trim-silence'
+              });
+              
+              console.log(`🎙️ Twilio recording started:`, recordingData);
+              session.recordingSid = recordingData.sid;
+            } catch (error) {
+              console.error(`❌ Failed to start Twilio recording:`, error);
+            }
+          } else {
+            // Fall back to local recording
+            recordingManager.startRecording(session.streamSid!);
+            session.localRecordingStarted = true;
           }
         } else {
-          // Fall back to local recording
-          recordingManager.startRecording(session.streamSid!);
+          console.log(`⏸️ Recording delayed until consent is granted`);
         }
       }
 
@@ -249,8 +257,8 @@ async function handleTwilioMessage(data: RawData, sessionId: string) {
     case "media":
       session.latestMediaTimestamp = msg.media.timestamp;
 
-      // Only do local recording if not using Twilio recording
-      if (process.env.ENABLE_RECORDING !== "false" && !process.env.PUBLIC_URL && session.streamSid && msg.media.payload) {
+      // Only do local recording if not using Twilio recording AND recording has started
+      if (process.env.ENABLE_RECORDING !== "false" && !process.env.PUBLIC_URL && session.streamSid && msg.media.payload && session.localRecordingStarted) {
         const audioBuffer = Buffer.from(msg.media.payload, 'base64');
         recordingManager.writeInboundAudio(session.streamSid, audioBuffer);
       }
@@ -486,8 +494,8 @@ const handleModelMessage = traceable(
             session.audioDurationMs = (session.audioChunkCount || 0) * 20;
           }
 
-          // Only do local recording if not using Twilio recording
-          if (process.env.ENABLE_RECORDING !== "false" && !process.env.PUBLIC_URL && event.delta) {
+          // Only do local recording if not using Twilio recording AND recording has started
+          if (process.env.ENABLE_RECORDING !== "false" && !process.env.PUBLIC_URL && event.delta && session.localRecordingStarted) {
             const audioBuffer = Buffer.from(event.delta, 'base64');
             recordingManager.writeOutboundAudio(session.streamSid, audioBuffer);
           }
@@ -511,7 +519,7 @@ const handleModelMessage = traceable(
         const { item } = event;
         if (item.type === "function_call") {
           handleFunctionCall(item)
-            .then((output) => {
+            .then(async (output) => {
               if (session.modelConn) {
                 jsonSend(session.modelConn, {
                   type: "conversation.item.create",
@@ -527,6 +535,32 @@ const handleModelMessage = traceable(
                   console.log(`🔄 Updating functions after consent handling for session ${session.streamSid}`);
                   session.consentHandled = true;
                   sessionControl.shouldUpdateFunctions = false;
+                  
+                  // Start recording only if consent was granted (continue_with_consent function)
+                  if (item.name === 'continue_with_consent' && process.env.ENABLE_RECORDING !== "false" && session.streamSid && !session.recordingSid) {
+                    console.log(`🎙️ Starting recording after consent granted`);
+                    if (process.env.PUBLIC_URL && session.callSid) {
+                      try {
+                        const recordingData = await startTwilioRecording({
+                          callSid: session.callSid,
+                          recordingStatusCallback: `${process.env.PUBLIC_URL}/recording-callback`,
+                          recordingStatusCallbackEvent: ['in-progress', 'completed', 'absent'],
+                          recordingChannels: 'mono',
+                          trim: 'trim-silence'
+                        });
+                        
+                        console.log(`🎙️ Twilio recording started after consent:`, recordingData);
+                        session.recordingSid = recordingData.sid;
+                      } catch (error) {
+                        console.error(`❌ Failed to start Twilio recording after consent:`, error);
+                      }
+                    } else if (!process.env.PUBLIC_URL) {
+                      // Fall back to local recording
+                      recordingManager.startRecording(session.streamSid);
+                      session.localRecordingStarted = true;
+                      console.log(`📼 Local recording started for session ${session.streamSid}`);
+                    }
+                  }
                   
                   // Send updated session config without consent functions
                   const nonConsentFunctions = getNonConsentFunctions();
@@ -731,6 +765,7 @@ function closeAllConnections(session: Session) {
   session.audioDurationMs = undefined;
   session.audioChunkCount = undefined;
   session.saved_config = undefined;
+  session.localRecordingStarted = undefined;
 }
 
 function cleanupConnection(ws?: WebSocket) {

@@ -43,8 +43,17 @@ The system implements a strict separation between consent collection and regular
      - All service functions are added
      - System prompt switches to base version
      - Normal conversation begins
+   - **Recording behavior**:
+     - If `continue_with_consent` is called: Recording starts immediately
+     - If `hang_up_call` is called: No recording occurs, call ends
+     - If `clarify_consent` is called: Recording remains delayed
 
 ## Key Features
+
+### Recording Integration
+- **With consent handling**: Recording only starts after explicit consent via `continue_with_consent`
+- **Without consent handling**: Recording starts immediately when call begins
+- **Privacy compliance**: No audio is recorded until consent is granted
 
 ### Automatic Function Swapping
 ```typescript
