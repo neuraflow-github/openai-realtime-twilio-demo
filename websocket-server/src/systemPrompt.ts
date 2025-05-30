@@ -95,7 +95,7 @@ export function getInitialGreeting(disableConsentHandling: boolean = false) {
     // When consent is disabled, start with a proper greeting
     return {
       enabled: true,
-      message: "Guten Tag! Hier ist die Stadt Siegburg. Wie kann ich Ihnen helfen?",
+      message: "Guten Tag! Hier ist die Stadt Siegburg. Wie kann ich Ihnen helfen? ",
       delayMs: 500
     };
   }
