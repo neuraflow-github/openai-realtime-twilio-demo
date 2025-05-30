@@ -9,7 +9,7 @@ import {
   trackAssistantMessage,
   trackFunctionCall
 } from "./conversationTracker";
-import { SYSTEM_PROMPT, SYSTEM_PROMPT_BASE, SYSTEM_PROMPT_WITH_CONSENT, INITIAL_GREETING, VOICE_CONFIG, CONVERSATION_CONFIG } from "./systemPrompt";
+import { SYSTEM_PROMPT, SYSTEM_PROMPT_BASE, SYSTEM_PROMPT_WITH_CONSENT, INITIAL_GREETING, VOICE_CONFIG, CONVERSATION_CONFIG, getSystemPrompt, getInitialGreeting } from "./systemPrompt";
 import { recordingManager } from "./recordingManager";
 import { startTwilioRecording } from "./twilioRecording";
 import { getConsentDenialAudioChunks } from "./prerecordedAudio";
@@ -204,10 +204,14 @@ async function handleTwilioMessage(data: RawData, sessionId: string) {
       session.responseStartTimestamp = undefined;
       session.audioDurationMs = undefined;
       session.audioChunkCount = undefined;
-      session.consentHandled = false;
+      
+      // Check if consent handling is disabled
+      const disableConsentHandling = process.env.DISABLE_CONSENT_HANDLING === "true";
+      
+      session.consentHandled = disableConsentHandling; // Skip consent if disabled
       
       // Reset sessionControl flags for new session
-      sessionControl.consentHandled = false;
+      sessionControl.consentHandled = disableConsentHandling;
       sessionControl.shouldUpdateFunctions = false;
       sessionControl.shouldHangUp = false;
       sessionControl.hangUpReason = "";
@@ -313,10 +317,25 @@ const tryConnectModel = traceable(
     session.modelConn.on("open", () => {
       console.log(`✅ WebSocket connected successfully for session ${session.streamSid}`);
       const config = session.saved_config || {};
+      
+      // Check if consent handling is disabled
+      const disableConsentHandling = process.env.DISABLE_CONSENT_HANDLING === "true";
 
-      // Initially, only provide consent-related functions
-      const consentFunctions = getOnlyConsentFunctions();
-      const tools = consentFunctions.map(f => ({
+      // Get appropriate functions based on consent handling setting
+      let availableFunctions;
+      let functionsDescription;
+      
+      if (disableConsentHandling) {
+        // Provide all non-consent functions from the start
+        availableFunctions = getNonConsentFunctions();
+        functionsDescription = "all service functions";
+      } else {
+        // Initially, only provide consent-related functions
+        availableFunctions = getOnlyConsentFunctions();
+        functionsDescription = "consent functions only";
+      }
+      
+      const tools = availableFunctions.map(f => ({
         type: "function",
         name: f.schema.name,
         description: f.schema.description,
@@ -334,17 +353,19 @@ const tryConnectModel = traceable(
           },
           input_audio_format: "g711_ulaw",
           output_audio_format: "g711_ulaw",
-          instructions: config.instructions || SYSTEM_PROMPT_WITH_CONSENT,
+          instructions: config.instructions || getSystemPrompt(disableConsentHandling),
           tools: tools,
           ...config,
         },
       };
 
-      console.log(`📤 Sending initial session config with ${tools.length} consent functions only`);
+      console.log(`📤 Sending initial session config with ${tools.length} ${functionsDescription}`);
       console.log("📤 Session config:", JSON.stringify(sessionConfig, null, 2));
       jsonSend(session.modelConn, sessionConfig);
 
-      if (INITIAL_GREETING.enabled) {
+      // Only send initial greeting if consent handling is disabled or explicitly configured
+      const initialGreeting = getInitialGreeting(disableConsentHandling);
+      if (initialGreeting.enabled) {
         setTimeout(() => {
           if (isOpen(session.modelConn)) {
             console.log(`👋 Sending greeting message for session ${session.streamSid}`);
@@ -355,7 +376,7 @@ const tryConnectModel = traceable(
                 role: "user",
                 content: [{
                   type: "input_text",
-                  text: INITIAL_GREETING.message
+                  text: initialGreeting.message
                 }]
               }
             });
@@ -364,7 +385,7 @@ const tryConnectModel = traceable(
               type: "response.create"
             });
           }
-        }, INITIAL_GREETING.delayMs);
+        }, initialGreeting.delayMs);
       }
     });
 

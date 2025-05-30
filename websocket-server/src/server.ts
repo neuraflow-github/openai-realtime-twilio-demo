@@ -95,7 +95,23 @@ app.all("/twiml", (req, res) => {
   wsUrl.protocol = "wss:";
   wsUrl.pathname = `/call`;
 
-  const twimlContent = twimlTemplate.replace("{{WS_URL}}", wsUrl.toString());
+  // Check if consent handling is disabled
+  const consentDisabled = process.env.DISABLE_CONSENT_HANDLING === "true";
+  
+  let twimlContent;
+  if (consentDisabled) {
+    // Generate TwiML without the Play element
+    twimlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${wsUrl.toString()}" />
+  </Connect>
+</Response>`;
+  } else {
+    // Use the template with the Play element
+    twimlContent = twimlTemplate.replace("{{WS_URL}}", wsUrl.toString());
+  }
+  
   res.type("text/xml").send(twimlContent);
 });
 
@@ -199,8 +215,14 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 server.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
   
+  // Log consent handling configuration
+  const consentDisabled = process.env.DISABLE_CONSENT_HANDLING === "true";
+  console.log(`🔒 Consent handling: ${consentDisabled ? 'DISABLED' : 'ENABLED'}`);
+  
   // Preload the consent denial audio
-  await preloadAudio();
+  if (!consentDisabled) {
+    await preloadAudio();
+  }
   
   if (process.env.LANGSMITH_TRACING === "true") {
     console.log("🦜 LangSmith tracing enabled");

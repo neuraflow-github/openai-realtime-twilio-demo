@@ -83,3 +83,22 @@ export const CONVERSATION_CONFIG = {
   enableTranscription: true,
   transcriptionModel: "gpt-4o-transcribe"
 };
+
+// Helper function to get appropriate system prompt based on consent setting
+export function getSystemPrompt(disableConsentHandling: boolean = false): string {
+  return disableConsentHandling ? SYSTEM_PROMPT_BASE : SYSTEM_PROMPT_WITH_CONSENT;
+}
+
+// Helper function to get appropriate initial greeting based on consent setting
+export function getInitialGreeting(disableConsentHandling: boolean = false) {
+  if (disableConsentHandling) {
+    // When consent is disabled, start with a proper greeting
+    return {
+      enabled: true,
+      message: "Guten Tag! Hier ist die Stadt Siegburg. Wie kann ich Ihnen helfen?",
+      delayMs: 500
+    };
+  }
+  // When consent is enabled, use empty message to listen for consent response
+  return INITIAL_GREETING;
+}
